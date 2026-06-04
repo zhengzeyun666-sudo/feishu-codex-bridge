@@ -1,0 +1,30 @@
+language = "zh"
+
+[log]
+level = "debug"
+
+[[projects]]
+name = "my-workspace"
+
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "/Users/YOUR_USERNAME"
+mode = "yolo"
+
+[[projects.platforms]]
+type = "feishu"
+
+[projects.platforms.options]
+app_id = "cli_YOUR_APP_ID"
+app_secret = "YOUR_APP_SECRET"
+allow_from = "*"
+admin_from = "ou_YOUR_OPEN_ID"
+
+[[hooks]]
+event = "message.received"
+type = "command"
+command = "python3 /Users/YOUR_USERNAME/.cc-connect/relay.py"
+async = true
+timeout = 5
