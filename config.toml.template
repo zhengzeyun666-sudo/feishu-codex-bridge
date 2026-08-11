@@ -1,17 +1,18 @@
 language = "zh"
 
 [log]
-level = "debug"
+level = "info"
 
 [[projects]]
 name = "my-workspace"
+admin_from = "ou_YOUR_OPEN_ID"
 
 [projects.agent]
 type = "codex"
 
 [projects.agent.options]
-work_dir = "/Users/YOUR_USERNAME"
-mode = "yolo"
+work_dir = "/Users/YOUR_USERNAME/path/to/workspace"
+mode = "suggest"
 
 [[projects.platforms]]
 type = "feishu"
@@ -19,8 +20,7 @@ type = "feishu"
 [projects.platforms.options]
 app_id = "cli_YOUR_APP_ID"
 app_secret = "YOUR_APP_SECRET"
-allow_from = "*"
-admin_from = "ou_YOUR_OPEN_ID"
+allow_from = "ou_YOUR_OPEN_ID"
 
 [[hooks]]
 event = "message.received"

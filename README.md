@@ -1,46 +1,78 @@
-# 飞书直连 Codex 桌面版
+# 飞书连接 cc-connect 与 Codex
 
-这不是普通的飞书对话机器人。这是一个把 **Codex 桌面版的完整能力**搬到飞书上的桥接方案。
+这是一个轻量桥接示例：cc-connect 接收飞书消息，`relay.py` 再把消息写入本地 `inbox.jsonl`，供正在运行的 Codex 桌面版任务读取和处理。
 
-**你能做什么：**
-- 🖥️ **操控桌面应用和文件** — 通过飞书自然语言让 Codex 打开 Chrome、编辑文档、读写文件
-- 🌐 **浏览器操作** — 搜索网页、填表单，一句话搞定
-- 📸 **截取画面** — 截取网页或桌面画面，以图片附件直接发回飞书
-- 📎 **发送原始文件** — Excel、PPT、PDF、图片，以文件附件发回，不是纯文本
-- 💰 **低成本运行** — 外接 DeepSeek v4 Pro 等第三方 API，不用官方模型也能跑
+> 当前是“消息交接”，不是无人值守的桌面版远程控制。Codex 桌面版需要有一个正在运行的任务主动读取 inbox；本仓库不包含常驻轮询器，也不会自行触发桌面操作。
 
-**它怎么工作的：**
-飞书消息 → cc-connect (WebSocket) → Hook 中继 → Codex 桌面版处理 → 文件/消息原样返回飞书
+## 能做什么
 
-Codex 桌面版具备浏览器控制、文档处理、桌面操控等插件能力，CLI 版没有这些。这个方案通过 inbox 中继让桌面版接管高级请求，CLI agent 处理日常对话。一句话：聊天能做的它做，聊天做不了的（发文件、操作电脑）它也做。
+- 飞书消息通过 cc-connect 的 WebSocket 长连接进入本机
+- cc-connect 的 Codex CLI agent 处理普通对话
+- Hook 将消息写入权限为 `0600` 的 JSONL 队列
+- 活跃的 Codex 桌面版任务可读取队列，并通过 `cc-connect send` 回传消息或文件
+
+```text
+飞书 → cc-connect → message.received Hook → inbox.jsonl
+                                              ↓ 主动读取
+飞书 ← cc-connect send ← Codex CLI / Codex 桌面版任务
+```
 
 ## 快速开始
 
-详见 [SKILL.md](SKILL.md) — 完整配置指南（364 行，含架构图、安装方式、故障排查）。
+最低要求：Codex 桌面版、Node.js 18+、Python 3、飞书账号。
+
+```bash
+npm install -g cc-connect
+git clone https://github.com/zhengzeyun666-sudo/feishu-codex-bridge.git
+cd feishu-codex-bridge
+
+mkdir -p ~/.cc-connect
+cp relay.py ~/.cc-connect/
+cp config.toml.template ~/.cc-connect/config.toml
+chmod 700 ~/.cc-connect
+chmod 600 ~/.cc-connect/config.toml
+chmod +x ~/.cc-connect/relay.py
+```
+
+编辑 `~/.cc-connect/config.toml`，替换 App ID、App Secret、工作目录和飞书 Open ID，然后运行：
+
+```bash
+cc-connect --config ~/.cc-connect/config.toml
+```
+
+完整的飞书权限、事件订阅、验证和排障步骤见 [SKILL.md](SKILL.md)。
+
+## 安全默认值
+
+模板默认采用以下边界：
+
+- `allow_from` 只允许指定飞书 Open ID，不使用 `*`
+- `admin_from` 位于 `[[projects]]` 层级，仅允许指定用户执行特权命令
+- Codex 使用 `suggest`（只读沙箱），不使用会绕过审批和沙箱的 `yolo`
+- `work_dir` 指向单个工作区，不直接暴露整个用户目录
+
+首次不知道 Open ID 时，可临时把 `allow_from` 设为 `*`，只发送 `/whoami` 获取 ID；随后立即改回具体 ID 并重启 cc-connect。
+
+## 本地验证
+
+```bash
+python3 -m unittest -v
+python3 -m py_compile relay.py
+```
 
 ## 文件说明
 
 | 文件 | 用途 |
-|------|------|
-| `SKILL.md` | 完整配置文档 |
-| `config.toml.template` | cc-connect 配置模板（TOML 格式，app_id/app_secret 分开写） |
-| `relay.py` | Hook 中继脚本 |
+|---|---|
+| `SKILL.md` | 完整配置与排障指南 |
+| `config.toml.template` | 安全默认的 cc-connect 配置模板 |
+| `relay.py` | 将 Hook 消息追加到本地 JSONL 队列 |
+| `test_relay.py` | 中继脚本的最小回归测试 |
 | `LICENSE` | MIT |
 
-## 一键安装
+## 已知限制
 
-```bash
-npm install -g cc-connect
-
-# CLI 参数用「冒号」拼接 App ID 和 Secret（是 cc-connect 支持的简写格式，不同于 TOML 里的分开写法）
-cc-connect feishu setup --project my-workspace --app cli_YOUR_APP_ID:YOUR_APP_SECRET
-```
-
-然后把 `relay.py` 放到 `~/.cc-connect/` 下，修改 `config.toml` 加上 `[[hooks]]` 即可。
-
-## 最低要求
-
-- Codex 桌面版
-- Node.js >= 18
-- Python 3
-- 飞书账号
+- Hook 会无条件接收符合 cc-connect 平台权限配置的消息，无法按消息内容分流
+- CLI agent 和桌面版任务可能同时回复同一条消息
+- 桌面版任务不运行或未读取 inbox 时，消息只会留在本地队列
+- 第三方模型和 Provider 由 cc-connect/Codex CLI 配置决定，不是本仓库提供的能力

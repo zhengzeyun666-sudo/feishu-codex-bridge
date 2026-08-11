@@ -20,29 +20,50 @@ cc-connect Hook 中继脚本
   2. chmod +x ~/.cc-connect/relay.py
   3. 在 cc-connect config.toml 的 [[hooks]] 中引用
 """
-import os
 import json
+import os
 import time
+from pathlib import Path
 
-INBOX_FILE = os.path.expanduser("~/.cc-connect/inbox.jsonl")
+DEFAULT_INBOX_FILE = "~/.cc-connect/inbox.jsonl"
 
 
-def main():
-    msg = {
-        "timestamp": time.time(),
-        "user_id": os.environ.get("CC_HOOK_USER_ID", ""),
-        "user_name": os.environ.get("CC_HOOK_USER_NAME", ""),
-        "content": os.environ.get("CC_HOOK_CONTENT", ""),
-        "session_key": os.environ.get("CC_HOOK_SESSION_KEY", ""),
-        "platform": os.environ.get("CC_HOOK_PLATFORM", ""),
-        "project": os.environ.get("CC_HOOK_PROJECT", ""),
+def message_from_env(env=os.environ, now=time.time):
+    session_key = env.get("CC_HOOK_SESSION_KEY", "").strip()
+    if not session_key:
+        raise ValueError("CC_HOOK_SESSION_KEY is required")
+
+    return {
+        "timestamp": now(),
+        "user_id": env.get("CC_HOOK_USER_ID", ""),
+        "user_name": env.get("CC_HOOK_USER_NAME", ""),
+        "content": env.get("CC_HOOK_CONTENT", ""),
+        "session_key": session_key,
+        "platform": env.get("CC_HOOK_PLATFORM", ""),
+        "project": env.get("CC_HOOK_PROJECT", ""),
         "status": "pending",
     }
 
-    with open(INBOX_FILE, "a", encoding="utf-8") as f:
+
+def append_message(path, msg):
+    path = Path(path).expanduser()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    fd = os.open(path, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
-    print(f"relay ok: {msg['user_name']} → inbox")
+
+def main():
+    msg = message_from_env()
+    append_message(os.environ.get("CC_RELAY_INBOX", DEFAULT_INBOX_FILE), msg)
+    print("relay ok → inbox")
 
 
 if __name__ == "__main__":

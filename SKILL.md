@@ -1,17 +1,17 @@
 ---
 name: feishu-codex-bridge
-description: 将飞书机器人直连 Codex 桌面版，实现通过飞书远程与 Codex 对话、收发文件、操控电脑。当用户想要通过飞书与 Codex 通信、配置 cc-connect、搭建飞书-Codex 桥接时使用此技能。
-metadata:
-  short-description: 飞书直连 Codex 桌面版
+description: 通过 cc-connect Hook 将飞书消息写入本地队列，供 Codex CLI 或活跃的 Codex 桌面版任务读取和回复。当用户想配置 cc-connect、搭建飞书-Codex 消息交接时使用此技能。
 ---
 
-# 飞书直连 Codex 桌面版
+# 飞书连接 cc-connect 与 Codex
 
-通过 cc-connect + Hook 中继，将飞书机器人对接 Codex 桌面版，实现：
+通过 cc-connect + Hook 中继，将飞书消息交接给本机 Codex：
 
 - 飞书私聊/群聊收发消息
-- Codex 桌面版直接回复（支持文件发送、浏览器操控、桌面操作）
-- 开机自启，长期运行
+- cc-connect 的 Codex CLI agent 处理普通对话
+- 活跃的 Codex 桌面版任务读取 inbox 后回复或发送文件
+
+> 当前不是无人值守的桌面版远程控制。桌面版需要有一个正在运行的任务主动读取 `inbox.jsonl`；本仓库不包含常驻轮询器，也不会自行触发桌面操作。
 
 ## 重要说明：路径与环境
 
@@ -26,11 +26,11 @@ metadata:
 
 ```
 飞书消息 → cc-connect(WebSocket) → Hook(relay.py) → inbox.jsonl
-                                                        ↓
-飞书 ← cc-connect send --file ← Codex 桌面版轮询处理
+                                                        ↓ 主动读取
+飞书 ← cc-connect send --file ← Codex CLI / Codex 桌面版任务
 ```
 
-cc-connect 内置的 Codex CLI agent 同时运行处理简单消息，桌面版通过 inbox.jsonl 截获需要高级权限的请求。
+cc-connect 内置的 Codex CLI agent 同时运行处理普通消息；桌面版任务可在用户明确授权时读取 inbox 并执行高级操作。
 
 ## 前置条件
 
@@ -107,7 +107,6 @@ xattr -d com.apple.quarantine cc-connect
 
 ```bash
 cc-connect --version
-# 应输出: cc-connect v1.3.x
 ```
 
 如果提示 `command not found`，npm 全局 bin 目录不在 PATH 中：
@@ -177,10 +176,14 @@ cc-connect feishu setup --project my-workspace --app cli_YOUR_APP_ID:YOUR_APP_SE
 如果一键配置不行，手动创建 `~/.cc-connect/config.toml`，参考仓库中的 [config.toml.template](config.toml.template)。
 
 关键字段：
-- `work_dir` → 你的用户主目录
+- `work_dir` → 单个项目目录，不要直接填写整个用户主目录
 - `app_id` / `app_secret` → 飞书应用凭证
-- `admin_from` → 你的 open_id（启动后在飞书私聊机器人发送 `/whoami` 获取）
+- `allow_from` → 允许使用机器人的 open_id
+- `admin_from` → 必须写在 `[[projects]]` 层级，控制特权命令使用者
+- `mode` → Codex 建议先用 `suggest`；`yolo` 会绕过审批和沙箱
 - `[[hooks]]` 中的 `command` 路径 → 指向 relay.py
+
+如果首次配置时不知道 open_id，可临时把 `allow_from` 设为 `*`，只发送 `/whoami`；拿到 ID 后立即写入 `allow_from` 和 `admin_from`，再重启 cc-connect。
 
 ### 3.3 部署中继脚本
 
@@ -188,7 +191,9 @@ cc-connect feishu setup --project my-workspace --app cli_YOUR_APP_ID:YOUR_APP_SE
 
 ```bash
 cp relay.py ~/.cc-connect/
+chmod 700 ~/.cc-connect
 chmod +x ~/.cc-connect/relay.py
+chmod 600 ~/.cc-connect/config.toml
 ```
 
 > relay.py 的详细注释和说明见文件本身，这里不重复内嵌，保持文档和代码分离。
@@ -200,8 +205,8 @@ chmod +x ~/.cc-connect/relay.py
 ```bash
 export PATH="$(npm config get prefix)/bin:$PATH"
 cd ~/.cc-connect
-rm -f inbox.jsonl .config.toml.lock run/api.sock
 touch inbox.jsonl
+chmod 600 inbox.jsonl config.toml
 cc-connect --force
 ```
 
@@ -225,7 +230,7 @@ cc-connect daemon uninstall  # 卸载
 ## 第五步：验证链路
 
 1. 在飞书上私聊机器人，发送 "你好"
-2. 检查 inbox：`cat ~/.cc-connect/inbox.jsonl`
+2. 检查 inbox：`tail -n 1 ~/.cc-connect/inbox.jsonl`
 3. 应看到你的消息内容，包括 `session_key`、`content` 等字段
 
 ### 测试桌面版回复
@@ -301,18 +306,14 @@ cc-connect 的 `agent.type = "codex"` 底层调用的是 `codex exec --json`（C
 
 ### inbox 轮询非实时
 
-桌面版 Codex 需要主动读取 inbox.jsonl 才能发现新消息，不是推送模式。这意味着：
+桌面版 Codex 需要在一个正在运行的任务中主动读取 inbox.jsonl 才能发现新消息，不是推送模式。这意味着：
 
 - 桌面版不在当前会话时，消息会堆积在 inbox 中
 - 桌面版处理有延迟（取决于轮询频率）
 
-## 进阶：优化模型响应速度
+## 进阶：模型与 Provider
 
-修改 `~/.codex/config.toml` 切换模型：
-
-```toml
-model = "deepseek-v4-pro"  # 更快更强
-```
+模型和第三方 Provider 由 cc-connect 与 Codex CLI 的当前配置决定。请以 cc-connect 官方 `config.example.toml` 和 Codex 文档为准，不要直接照抄未经验证的模型名。
 
 ## 故障排查
 
@@ -326,7 +327,7 @@ model = "deepseek-v4-pro"  # 更快更强
 ### inbox.jsonl 无消息
 
 1. 确认 config.toml 中 `[[hooks]]` 的 `command` 路径拼写正确
-2. 手动测试 relay：`python3 ~/.cc-connect/relay.py`
+2. 在仓库中运行中继测试：`python3 -m unittest -v`
 3. 查看 cc-connect 日志是否有 `hooks: command executed`
 
 ### 启动冲突
